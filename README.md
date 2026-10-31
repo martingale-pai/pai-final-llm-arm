@@ -96,3 +96,4 @@ python -m eval.evaluate --report
 - Franka Emika Panda モデル：[google-deepmind/mujoco_menagerie](https://github.com/google-deepmind/mujoco_menagerie)（Apache-2.0）。出典は [assets/SOURCE.md](assets/SOURCE.md)
 - 設計の背景：SayCan、Inner Monologue、Code as Policies ほか（[参考文献](docs/03_references.md)）
 - 本リポジトリには講座の資料・配布素材は含めていません
+- 実装にはコーディングエージェント（Claude Code）を併用しました。設計判断・評価設計・結果の検証は作者が行っています

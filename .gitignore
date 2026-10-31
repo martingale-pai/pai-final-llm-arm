@@ -1,0 +1,11 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 生成物（動画・ログ・評価結果）
+outputs/
+
+# 秘密情報（API キーなど）は絶対にコミットしない
+.env
+*.key

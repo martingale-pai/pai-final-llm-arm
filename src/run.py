@@ -29,8 +29,9 @@ def fmt_step(skill: str, kw: dict) -> str:
 
 def run_episode(instruction: str, seed: int, planner: GeminiPlanner, *, replan: bool = True,
                 disturb: bool = False, record: bool = False, camera: str = "diag",
-                task_check=None, expect_feasible: bool = True, verbose: bool = True) -> dict:
-    sim = Sim(seed=seed, record=record, camera=camera)
+                task_check=None, expect_feasible: bool = True, verbose: bool = True,
+                record_speed: float = 1.0) -> dict:
+    sim = Sim(seed=seed, record=record, camera=camera, record_speed=record_speed)
     robot = Robot(sim)
     initial_state = sim.get_state(noisy=False)
     history: list[dict] = []
@@ -73,9 +74,10 @@ def run_episode(instruction: str, seed: int, planner: GeminiPlanner, *, replan: 
             sim.caption = f"{head}\n【Gemini】実行不能と判断：{p.reasoning}\n→ ロボットは動かしません"
             show(4.0)
             break
-        sim.caption = (f"{head}\n【Gemini {attempt}回目の計画（{res.latency_s:.1f}秒）】{p.reasoning}\n"
+        why = p.reasoning if len(p.reasoning) <= 70 else p.reasoning[:68] + "…"
+        sim.caption = (f"{head}\n【Gemini {attempt}回目の計画（{res.latency_s:.1f}秒）】{why}\n"
                        f"成功条件：{', '.join(a['goal'])}")
-        show(4.0)
+        show(8.0)
 
         problems = validate(p, state)
         if problems:
@@ -93,7 +95,7 @@ def run_episode(instruction: str, seed: int, planner: GeminiPlanner, *, replan: 
             if not r.ok:
                 failed = {"step": i + 1, "skill": fmt_step(skill, kw), "reason": r.reason}
                 sim.caption = f"{head}\n【失敗を検知】{r.reason}\n→ 失敗理由と現在の状態を Gemini に返して再計画"
-                show(3.0)
+                show(6.0)
                 break
         if failed:
             a["exec_failure"] = failed
@@ -110,7 +112,7 @@ def run_episode(instruction: str, seed: int, planner: GeminiPlanner, *, replan: 
         if not unmet:
             outcome = "success"
             sim.caption = f"{head}\n【判定】成功条件をすべて満たしました（{', '.join(a['goal'])}）"
-            show(2.5)
+            show(5.0)
             break
         fail_layer = "goal_unmet"
         if verbose:
@@ -149,7 +151,7 @@ def main() -> None:
     planner = GeminiPlanner()
     t0 = time.time()
     log = run_episode(instruction, args.seed, planner, replan=not args.no_replan, disturb=args.disturb,
-                      record=args.record, camera=args.camera,
+                      record=args.record, camera=args.camera, record_speed=args.speed,
                       task_check=task.check if task and not args.instruction else None,
                       expect_feasible=task.expect_feasible if task and not args.instruction else True)
     sim = log.pop("_sim")
@@ -163,7 +165,8 @@ def main() -> None:
     if args.record:
         from src.video import Clip, render
         scene = f"{task.id} {task.kind}" if task and not args.instruction else "自由指示"
-        render([Clip(sim.frames, sim.captions, scene=scene, speed=args.speed)], OUTPUTS / f"{name}.mp4")
+        render([Clip(sim.frames, sim.captions, scene=scene, speed=args.speed, presampled=True)],
+               OUTPUTS / f"{name}.mp4")
     sim.close()
 
 

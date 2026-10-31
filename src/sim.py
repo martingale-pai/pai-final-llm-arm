@@ -137,7 +137,8 @@ class Sim:
     """シーンの生成・状態取得・外乱・録画をまとめたクラス。"""
 
     def __init__(self, seed: int = 0, record: bool = False, obs_noise: float = 0.003,
-                 camera: str = "front", width: int = 1280, height: int = 720) -> None:
+                 camera: str = "front", width: int = 1280, height: int = 720,
+                 record_speed: float = 1.0) -> None:
         self.model = build_model()
         self.data = mujoco.MjData(self.model)
         self.obs_noise = obs_noise
@@ -148,6 +149,8 @@ class Sim:
         self.caption = ""
         self._renderer = mujoco.Renderer(self.model, height=height, width=width) if record else None
         self._next_frame_t = 0.0
+        # 2 倍速で使う動画なら、最初から 2 倍の間隔でフレームを取る（メモリ節約）
+        self.frame_dt = record_speed / VIDEO_FPS
         m = self.model
         self.tcp_site = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SITE, "tcp")
         self.block_body = {b[0]: mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, b[0]) for b in BLOCKS}
@@ -192,7 +195,7 @@ class Sim:
             mujoco.mj_step(self.model, self.data)
             if self.record and self.data.time >= self._next_frame_t:
                 self._capture()
-                self._next_frame_t += 1.0 / VIDEO_FPS
+                self._next_frame_t += self.frame_dt
 
     def _capture(self) -> None:
         self._renderer.update_scene(self.data, camera=self.camera)

@@ -54,7 +54,7 @@ def overlay(frame: np.ndarray, caption: str, scene: str = "", speed: str = "") -
     d = ImageDraw.Draw(layer)
     f_cap, f_tag = _font(28), _font(24, bold=True)
     if caption:
-        lines = _wrap(d, caption, f_cap, W - 80)[:4]
+        lines = _wrap(d, caption, f_cap, W - 80)[:5]
         bar_h = 24 + 40 * len(lines)
         d.rectangle([0, H - bar_h, W, H], fill=(0, 0, 0, 170))
         for i, line in enumerate(lines):
@@ -107,21 +107,45 @@ class Clip:
     captions: list[str] = field(default_factory=list)
     scene: str = ""
     speed: float = 1.0  # 2.0 なら 1 フレームおきに間引いて 2 倍速にする
+    presampled: bool = False  # True: 録画時にすでに speed 倍の間隔で撮ってある（間引き不要）
 
     @classmethod
     def still(cls, frame: np.ndarray, seconds: float) -> "Clip":
         return cls([frame] * int(seconds * FPS), [""] * int(seconds * FPS))
 
 
+def _clip_frames(c: Clip):
+    step = 1 if c.presampled else max(1, int(round(c.speed)))
+    caps = c.captions or [""] * len(c.frames)
+    speed_tag = f"{c.speed:g}倍速" if c.speed != 1 else ""
+    for f, cap in zip(c.frames[::step], caps[::step]):
+        yield overlay(f, cap, c.scene, speed_tag) if (cap or c.scene or speed_tag) else f
+
+
 def render(clips: list[Clip], path: Path) -> Path:
-    out: list[np.ndarray] = []
-    for c in clips:
-        step = max(1, int(round(c.speed)))
-        caps = c.captions or [""] * len(c.frames)
-        speed_tag = f"{c.speed:g}倍速" if c.speed != 1 else ""
-        for f, cap in zip(c.frames[::step], caps[::step]):
-            out.append(overlay(f, cap, c.scene, speed_tag) if (cap or c.scene or speed_tag) else f)
+    """フレームを 1 枚ずつエンコーダに流す（全フレームをメモリに溜めない）。"""
+    import imageio
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    iio.imwrite(path, np.stack(out), fps=FPS, codec="libx264", quality=8)
-    print(f"saved: {path}  ({len(out) / FPS:.1f} 秒)")
+    n = 0
+    with imageio.get_writer(path, fps=FPS, codec="libx264", quality=8, macro_block_size=8) as w:
+        for c in clips:
+            for f in _clip_frames(c):
+                w.append_data(f)
+                n += 1
+    print(f"saved: {path}  ({n / FPS:.1f} 秒)")
     return path
+
+
+def concat(paths: list[Path], out: Path) -> Path:
+    """書き出し済みの mp4 を順につなぐ（1 本ずつ読みながら書く）。"""
+    import imageio
+
+    n = 0
+    with imageio.get_writer(out, fps=FPS, codec="libx264", quality=8, macro_block_size=8) as w:
+        for p in paths:
+            for f in iio.imiter(p):
+                w.append_data(f)
+                n += 1
+    print(f"saved: {out}  ({n / FPS:.1f} 秒)")
+    return out

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>説明資料_PAI最終課題_Martingale</title>
+<style>
+  @page { size: A4; margin: 16mm 16mm 18mm 16mm; }
+  :root { --ink: #1f2937; --muted: #6b7280; --accent: #1d4ed8; --line: #d1d5db; --soft: #f3f4f6; }
+  body { font-family: "Yu Gothic", "YuGothic", "Meiryo", sans-serif; font-weight: 500; color: var(--ink);
+         font-size: 10.5pt; line-height: 1.65; margin: 0; }
+  h1 { font-size: 20pt; margin: 0 0 2mm; line-height: 1.3; }
+  h2 { font-size: 13.5pt; border-left: 5px solid var(--accent); padding-left: 3mm; margin: 7mm 0 3mm; break-after: avoid; }
+  h3 { font-size: 11pt; margin: 4mm 0 1.5mm; break-after: avoid; }
+  p { margin: 1.5mm 0; }
+  .sub { color: var(--muted); font-size: 10pt; margin-bottom: 4mm; }
+  .lead { background: var(--soft); border-radius: 3mm; padding: 3mm 4mm; margin: 3mm 0; }
+  table { border-collapse: collapse; width: 100%; margin: 2mm 0 3mm; font-size: 9.5pt; break-inside: avoid; }
+  th, td { border: 1px solid var(--line); padding: 1.2mm 2mm; vertical-align: top; }
+  th { background: #eef2ff; text-align: left; }
+  td.num { text-align: right; white-space: nowrap; }
+  figure { margin: 3mm 0; text-align: center; break-inside: avoid; }
+  figure img { max-width: 100%; border: 1px solid var(--line); }
+  figcaption { color: var(--muted); font-size: 9pt; margin-top: 1mm; }
+  .row { display: flex; gap: 3mm; }
+  .row figure { flex: 1; margin: 2mm 0; }
+  code { font-family: "Consolas", monospace; font-size: 9pt; background: var(--soft); padding: 0 1mm; border-radius: 1mm; }
+  ul { margin: 1mm 0 2mm; padding-left: 6mm; }
+  li { margin: 0.6mm 0; }
+  .page-break { break-before: page; }
+  .small { font-size: 9pt; color: var(--muted); }
+  .good { color: #15803d; font-weight: 700; }
+  .bad { color: #b91c1c; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<h1>言語指示で片付けるロボットアーム</h1>
+<div class="sub">Gemini（LLM）× MuJoCo Franka Panda — 計画・検証・再計画の閉ループによるタスク実行<br>
+Physical AI 応用編1 最終課題 ／ Martingale ／ コード：GitHub リポジトリ（提出フォームに記載）／ 動画：YouTube（同）</div>
+
+<div class="lead">
+<b>概要</b>：日本語の指示（「机の上を片付けて」など）から、LLM が<b>実行するスキル列</b>と<b>成功条件</b>を生成し、
+シミュレータ上のロボットアームが検証済みのスキルで実行する。LLM の出力は<b>実行前（Validator）と実行後（Verifier）</b>で検証し、
+失敗したら<b>理由を LLM に返して再計画</b>する。運搬中に物体を落とす外乱を入れた評価で、
+再計画なしでは <span class="bad">0%</span> だった成功率が、再計画ありでは <span class="good">98%</span>（50 試行）になった。
+</div>
+
+<h2>1. 課題の目的</h2>
+<ul>
+  <li>人間の曖昧な言葉を、<b>検証できる</b>ロボット動作に変換する仕組みを作る（家庭の片付け・物流の仕分けを想定）</li>
+  <li>LLM の出力を鵜呑みにせず、<b>失敗に自分で気づいて立て直す</b>（閉ループ）ことを示す</li>
+  <li>講義で学んだ再現可能な評価（seed 固定・条件比較・層別の失敗分析）を自分の手で実践する</li>
+</ul>
+
+<h2>2. ベースラインとの違い（工夫の出発点）</h2>
+<p>課題 PDF の最終課題サンプル「ChatGPT API による自然言語ロボット操作」「Gemini Robotics-ER を試す」を出発点とした。
+サンプルは「言語 → ロボットへの命令」の一方向の変換が中心である。本課題では次の 4 点を加えて発展させた。</p>
+<table>
+  <tr><th style="width:28%">観点</th><th>サンプル（ベースライン）</th><th>本課題</th></tr>
+  <tr><td>LLM の出力</td><td>命令（コマンド）</td><td>スキル列 ＋ <b>成功条件（述語）</b>を JSON スキーマで強制</td></tr>
+  <tr><td>出力の検証</td><td>なし／目視</td><td>実行前 Validator ＋ 実行後 Verifier ＋ LLM に見せない正解判定</td></tr>
+  <tr><td>失敗への対応</td><td>なし</td><td>失敗理由と最新状態を返して<b>再計画</b>（最大 3 回）、外乱からの回復を評価</td></tr>
+  <tr><td>評価</td><td>デモ</td><td>6 種類の指示 × 10 seed × 4 条件 = <b>220 試行</b>の定量評価</td></tr>
+</table>
+
+<h2>3. システム構成</h2>
+<figure><img src="../media/architecture.png" style="width:92%">
+<figcaption>図1 システム構成。LLM は「何をするか」、検証済みスキルが「どう動くか」を担う。赤線は再計画のループ。</figcaption></figure>
+<table>
+  <tr><th style="width:22%">要素</th><th>内容</th></tr>
+  <tr><td>シミュレータ</td><td>MuJoCo 3.17。Franka Emika Panda（mujoco_menagerie）に、テーブル・ブロック 4 個（色 4 種 × 大小）・箱 2 個を MjSpec で追加。
+  ブロックの初期配置は seed から生成。物体位置には σ=3mm の認識誤差を加えて LLM・スキルに渡す。<br>
+  <span class="small">講義で想定された ROS / Gazebo / Genesis ではなく MuJoCo を選んだ理由：Windows で pip だけで動き、接触物理が高品質で、録画も容易なため（課題 PDF で他ツールの使用も可とされている）。</span></td></tr>
+  <tr><td>Planner（AI）</td><td>Gemini（<code>gemini-3.5-flash</code>、temperature=0）。推論のみで学習はしない。構造化出力で <code>feasible / reasoning / plan / goal</code> を返させる。</td></tr>
+  <tr><td>スキル</td><td><code>pick</code>・<code>place_in</code>・<code>stack_on</code>・<code>go_home</code>。失敗時は <code>grasp_failed</code>、<code>dropped_during_transport</code> などの理由を返す。</td></tr>
+  <tr><td>制御</td><td>減衰最小二乗法（DLS）による逆運動学を自前で実装。50Hz の各制御周期で IK を解き、手先を最小躍度補間で直線的に動かす。</td></tr>
+</table>
+
+<h2>4. 工夫した点</h2>
+<h3>4.1 LLM に任せる範囲を限定する（安全性）</h3>
+<p>LLM に関節角や座標を直接出させると、出力の揺れがそのまま危険な動作になる。そこで LLM には「どのスキルをどの物体に使うか」だけを決めさせ、
+動作は検証済みのスキルが担う（SayCan / Code as Policies と同じ考え方）。さらに出力を JSON スキーマで強制し、未定義のスキル名や壊れた出力を防いだ。</p>
+
+<h3>4.2 LLM の出力を「信用せずに検証する」</h3>
+<ul>
+  <li><b>Validator（実行前）</b>：計画を記号的にシミュレーションし、「持っていない物を置く」「上に物が載った物体を掴む」「存在しない ID」などを、ロボットを動かす前に検出する。</li>
+  <li><b>Verifier（実行後）</b>：LLM 自身が書いた成功条件（例 <code>in(red_cube, left_bin)</code>）を、シミュレータの状態で判定する。</li>
+  <li><b>正解判定</b>：評価では LLM に見せない別の判定を使い、「LLM が誤ったゴールを立てて自己満足する」ケースも検出できるようにした。</li>
+</ul>
+
+<h3>4.3 失敗から立ち直る閉ループ再計画</h3>
+<p>スキルが失敗したら、その理由と最新の状態を LLM に返して再計画させる。外乱（運搬中にグリッパを一瞬開いて物体を落とす）を注入して、
+実際に回復できることを確かめた。図2は動画の見せ場の場面で、Gemini は落ちた赤のブロックから順に、残りの作業だけを計画し直している。</p>
+<div class="row">
+  <figure><img src="../media/t5_1.jpg"><figcaption>(a) 運搬中に赤を落とし、失敗を検知</figcaption></figure>
+  <figure><img src="../media/t5_2.jpg"><figcaption>(b) Gemini が残りの作業を再計画</figcaption></figure>
+  <figure><img src="../media/t5_3.jpg"><figcaption>(c) 全物体を箱に収納して完了</figcaption></figure>
+</div>
+<figcaption style="text-align:center" class="small">図2 「机の上を片付けて」＋外乱の実行例（実際に Gemini を呼び出した結果、台本なし）</figcaption>
+
+<h3>4.4 曖昧な指示・実行不能な指示</h3>
+<p>「片付けて」のような曖昧な指示は解釈を <code>reasoning</code> に書かせ、存在しない対象（「紫のブロック」）は実行を拒否して理由を返し、ロボットを動かさない。</p>
+
+<h3>4.5 再現性と運用への配慮</h3>
+<ul>
+  <li>seed で初期配置を固定し、1 試行 1 行の JSONL に計画・トークン数・応答時間・失敗理由を記録。中断しても再実行で続きから評価できる。</li>
+  <li>API の上限エラーで止まった試行は「失敗」として成功率に混ぜない（当初は混ざっていたため修正した）。</li>
+</ul>
+
+<h2>5. 評価</h2>
+<p>6 種類の指示（単純移動・属性による選択・否定・積み上げ・曖昧な指示・実行不能な指示）を、seed 10 個 × 4 条件で実行した。</p>
+<table>
+  <tr><th>条件</th><th>再計画</th><th>外乱</th><th>成功率</th><th>試行数</th><th>LLM 呼び出し／試行</th><th>LLM 応答時間／試行</th></tr>
+  <tr><td>A</td><td>なし</td><td>なし</td><td class="num">95%</td><td class="num">60</td><td class="num">1.00</td><td class="num">5.6 秒</td></tr>
+  <tr><td>B</td><td>あり</td><td>なし</td><td class="num">100%</td><td class="num">60</td><td class="num">1.03</td><td class="num">5.8 秒</td></tr>
+  <tr><td>C</td><td>あり</td><td>あり</td><td class="num"><b>98%</b></td><td class="num">50</td><td class="num">2.04</td><td class="num">10.8 秒</td></tr>
+  <tr><td>D</td><td>なし</td><td>あり</td><td class="num">0%</td><td class="num">50</td><td class="num">1.00</td><td class="num">4.9 秒</td></tr>
+</table>
+<div class="row">
+  <figure><img src="../results/success_overall.png"><figcaption>図3 条件別の成功率</figcaption></figure>
+  <figure><img src="../results/success_rate.png"><figcaption>図4 タスク別・条件別の成功率</figcaption></figure>
+</div>
+<p class="small">外乱 D は必ず物体を落とすため、再計画なしでは原理的に失敗する設計であり、C との差は「再計画の効果」を示す。
+LLM 呼び出しは合計 274 回、入力 23.0 万／出力 6.0 万／思考 13.2 万トークン。1 試行あたりの LLM 呼び出しは外乱から回復する場合でも約 2 回。</p>
+
+<h2>6. 考察</h2>
+<h3>6.1 再計画は外乱に対して非常に有効</h3>
+<p>物体を落とすと、再計画なしでは全試行が失敗したが、再計画ありでは 50 回中 49 回回復した。追加のコストは LLM 呼び出し約 1 回（約 5 秒）である。</p>
+<h3>6.2 失敗はすべて「積み上げ」の物理層で起きた</h3>
+<p>A の失敗 3 件と C の失敗 1 件はすべて積み上げ（T4）で、LLM の計画はすべて妥当（大→大→小）、Validator で却下された計画も 0 件だった。
+原因は、5cm のブロックの上に 5cm のブロックを置くときに縁の余裕がなく、認識誤差と置く位置のずれで落ちることだった。
+失敗を層別に記録していたことで、<b>改善すべきは LLM ではなく「置く動作」</b>だと判断できた（第 7 回の「層ごとの切り分け」の実践）。</p>
+<h3>6.3 LLM の自己判定と正解判定は一致した</h3>
+<p>LLM が「成功」と判断した試行で、正解判定が失敗だったものは 0 件。成功条件が満たされなかった 1 件は Verifier が検出し、再計画ありの条件では回復した。</p>
+<h3>6.4 曖昧な指示の解釈は揺れる</h3>
+<p>「片付けて」は seed によって「全部を左の箱へ」「近い方の箱へ振り分け」と解釈が変わった（temperature=0 でも状態が違えば変わる）。
+どちらも正解判定では成功だが、ユーザが望んだ解釈かどうかはこの評価では測れていない。また、LLM の説明（reasoning）と実際の計画が食い違う例もあり、
+行動は説明ではなく Verifier で確かめる必要があることが分かった。</p>
+
+<h2>7. 限界と反省点</h2>
+<h3>7.1 この評価で測れていないこと</h3>
+<ul>
+  <li>カメラ画像からの物体認識（位置はシミュレータの真値＋ノイズ）、実機での把持・摩擦・遅延（sim2real）</li>
+  <li>外乱は「運搬中に落とす」1 種類・1 回のみ。指示は固定の 6 文で、言い換えや位置関係を含む指示は未評価</li>
+  <li>各セル 10 試行のため、T4 の差（70% → 100%）の信頼区間は広い</li>
+</ul>
+<h3>7.2 反省点・試行錯誤</h3>
+<ul>
+  <li>LLM の選定：無料枠では <code>gemini-2.5-flash</code> が新規ユーザに提供終了、<code>gemini-3.8-flash</code> は応答に約 160 秒かかり実用外だった。応答約 8 秒の <code>gemini-3.5-flash</code> を採用した。</li>
+  <li>無料枠の上限（1 モデル 1 日 20 リクエスト）では評価（274 回）が足りず、途中で有料枠に切り替えた。評価計画の段階で API の上限を確認しておくべきだった。</li>
+  <li>当初の評価スクリプトは API エラーの試行を失敗として集計していた。「何の失敗か」を分けて記録することの重要性を実感した。</li>
+  <li>外乱で物体が落ちる位置は経路の中間に固定しており、動画では目立ちにくかった。外乱の種類と見せ方は改善の余地がある。</li>
+</ul>
+
+<h2>8. 今後の課題</h2>
+<ul>
+  <li>置く直前に土台を観測し直す・置く速度を下げるなど、積み上げスキルの改善（6.2 の分析に基づく）</li>
+  <li>カメラ画像を Gemini に渡して物体を認識させる（VLM 化）、第 5 回の模倣学習（ACT）でスキル自体を学習ベースにする</li>
+  <li>Planner と Executor を ROS 2 のノードとして分離し、実機（SO-101 など）へ展開する</li>
+</ul>
+
+<h2>9. 参考文献</h2>
+<ol class="small">
+  <li>Ahn et al., "Do As I Can, Not As I Say: Grounding Language in Robotic Affordances (SayCan)", CoRL 2022.</li>
+  <li>Huang et al., "Inner Monologue: Embodied Reasoning through Planning with Language Models", CoRL 2022.</li>
+  <li>Liang et al., "Code as Policies: Language Model Programs for Embodied Control", ICRA 2023.</li>
+  <li>Singh et al., "ProgPrompt: Generating Situated Robot Task Plans using Large Language Models", ICRA 2023.</li>
+  <li>S. R. Buss, "Introduction to Inverse Kinematics with Jacobian Transpose, Pseudoinverse and Damped Least Squares methods", 2004.</li>
+  <li>Lynch &amp; Park, "Modern Robotics: Mechanics, Planning, and Control", Cambridge Univ. Press, 2017.</li>
+  <li>MuJoCo Documentation / MuJoCo Menagerie（Franka Emika Panda, Apache-2.0）, Google DeepMind.</li>
+  <li>Gemini API Documentation（Structured output）, Google.</li>
+  <li>Physical AI 応用編1 講義（第 1〜7 回）、最終課題サンプル「ChatGPT API による自然言語ロボット操作」「Gemini Robotics-ER を試す」。</li>
+</ol>
+
+</body>
+</html>

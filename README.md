@@ -16,7 +16,46 @@ LLM（Gemini）が **スキル列と成功条件** を生成し、検証済み�
 - **自前の逆運動学**：減衰最小二乗法（DLS）＋最小躍度補間で、手先を直線的に動かす
 - **再現可能な評価**：seed 固定 × 4 条件 × 220 試行を、LLM に見せない正解判定で採点
 
-![システム構成](docs/media/architecture.png)
+![システム構成（draw.io）](docs/media/architecture_drawio.png)
+
+図の元データ：[docs/media/architecture.drawio](docs/media/architecture.drawio)（[diagrams.net](https://app.diagrams.net/) で編集可）
+
+## 処理フロー（1 指示あたり）
+`src/run.py` の `run_episode()` が回す閉ループです。赤い箱は失敗時の処理で、失敗理由はすべて履歴として次の計画に渡されます。
+
+```mermaid
+flowchart TD
+    start(["指示文を受け取る"]) --> obs["シーン状態を取得<br/>sim.get_state（観測ノイズ σ=3mm）"]
+    obs --> plan["Planner：Gemini に計画を依頼<br/>指示＋状態＋これまでの失敗履歴"]
+    plan --> apiok{"API 応答あり？"}
+    apiok -- "なし" --> hist
+    apiok -- "あり" --> feas{"feasible？"}
+    feas -- "false" --> refuse["実行を拒否<br/>（ロボットは動かさない）"]
+    feas -- "true" --> val["Validator：計画を記号的に検査<br/>ID・引数・前提条件・goal の形"]
+    val -- "NG" --> hist["失敗理由を履歴に追加<br/>validator_errors / execution_failure / unmet_goals"]
+    val -- "OK" --> exec["Executor：スキルを順に実行<br/>pick → place_in / stack_on → go_home"]
+    exec -- "スキル失敗<br/>例 dropped_during_transport" --> home["go_home で安全姿勢へ"]
+    home --> hist
+    exec -- "全スキル完了" --> ver{"Verifier：成功条件 goal を<br/>シミュレータ状態で判定"}
+    ver -- "すべて満たす" --> ok["成功"]
+    ver -- "未達あり" --> hist
+    hist --> retry{"試行回数 < 3？<br/>（--no-replan なら 1）"}
+    retry -- "はい" --> obs
+    retry -- "いいえ" --> ng["失敗"]
+    ok --> gt
+    ng --> gt
+    refuse --> gt
+    gt[["正解判定（LLM には見せない）<br/>＋ JSONL ログ・動画を保存"]]
+
+    classDef ai fill:#DBEAFE,stroke:#2563EB,color:#111
+    classDef check fill:#EDE9FE,stroke:#7C3AED,color:#111
+    classDef act fill:#DCFCE7,stroke:#16A34A,color:#111
+    classDef fail fill:#FEE2E2,stroke:#DC2626,color:#111
+    class plan ai
+    class val,ver check
+    class exec,home act
+    class hist,ng,refuse fail
+```
 
 ## 評価結果（220 試行、`gemini-3.5-flash`）
 

@@ -92,6 +92,7 @@ python -m eval.evaluate --report
 - [設計書](docs/01_design.md) ／ [実装計画書](docs/02_implementation_plan.md) ／ [参考文献](docs/03_references.md) ／ [評価結果と考察](docs/04_results.md)
 
 ## ライセンスと出典
+- 本リポジトリのコード・ドキュメント：[MIT License](LICENSE)（`assets/franka_emika_panda/` を除く）
 - Franka Emika Panda モデル：[google-deepmind/mujoco_menagerie](https://github.com/google-deepmind/mujoco_menagerie)（Apache-2.0）。出典は [assets/SOURCE.md](assets/SOURCE.md)
 - 設計の背景：SayCan、Inner Monologue、Code as Policies ほか（[参考文献](docs/03_references.md)）
 - 本リポジトリには講座の資料・配布素材は含めていません

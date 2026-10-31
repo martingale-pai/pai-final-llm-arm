@@ -123,6 +123,8 @@ class GeminiPlanner:
         self.model = model
         self.temperature = temperature
         self.max_retries = max_retries
+        self.min_interval_s = float(os.environ.get("GEMINI_MIN_INTERVAL_S", "0"))
+        self._last_call = 0.0
 
     def build_prompt(self, instruction: str, state: dict, history: list[dict]) -> str:
         parts = [f"# 指示\n{instruction}", "# シーン状態\n" + json.dumps(state, ensure_ascii=False)]
@@ -142,6 +144,11 @@ class GeminiPlanner:
         )
         delay = 2.0
         for attempt in range(self.max_retries + 1):
+            # 無料枠の「1分あたりリクエスト数」制限に当たらないよう、呼び出し間隔を空ける
+            wait = self.min_interval_s - (time.time() - self._last_call)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_call = time.time()
             t0 = time.time()
             try:
                 resp = self.client.models.generate_content(model=self.model, contents=prompt, config=config)

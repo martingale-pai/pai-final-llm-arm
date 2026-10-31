@@ -40,8 +40,10 @@ def run_episode(instruction: str, seed: int, planner: GeminiPlanner, *, replan: 
     robot.slip_next = disturb
     outcome, fail_layer = "fail", ""
     max_attempts = MAX_ATTEMPTS if replan else 1
-    sim.caption = f"指示: {instruction}"
-    sim.hold(1.0)
+    head = f"指示：「{instruction}」"
+    show = sim.hold if sim.record else (lambda s: None)  # 字幕を読ませるための間（録画時のみ）
+    sim.caption = head
+    show(1.5)
 
     for attempt in range(1, max_attempts + 1):
         state = sim.get_state(noisy=True)
@@ -68,9 +70,12 @@ def run_episode(instruction: str, seed: int, planner: GeminiPlanner, *, replan: 
 
         if not p.feasible:
             outcome = "refused"
-            sim.caption = f"実行不能と判断: {p.reasoning}"
-            sim.hold(1.5)
+            sim.caption = f"{head}\n【Gemini】実行不能と判断：{p.reasoning}\n→ ロボットは動かしません"
+            show(4.0)
             break
+        sim.caption = (f"{head}\n【Gemini {attempt}回目の計画（{res.latency_s:.1f}秒）】{p.reasoning}\n"
+                       f"成功条件：{', '.join(a['goal'])}")
+        show(4.0)
 
         problems = validate(p, state)
         if problems:
@@ -83,10 +88,12 @@ def run_episode(instruction: str, seed: int, planner: GeminiPlanner, *, replan: 
 
         failed = None
         for i, (skill, kw) in enumerate(steps_to_calls(p)):
-            sim.caption = f"[{attempt}回目] {i + 1}/{len(p.plan)} {fmt_step(skill, kw)}"
+            sim.caption = f"{head}\n実行 [{attempt}回目] {i + 1}/{len(p.plan)}：{fmt_step(skill, kw)}"
             r = robot.execute(skill, kw)
             if not r.ok:
                 failed = {"step": i + 1, "skill": fmt_step(skill, kw), "reason": r.reason}
+                sim.caption = f"{head}\n【失敗を検知】{r.reason}\n→ 失敗理由と現在の状態を Gemini に返して再計画"
+                show(3.0)
                 break
         if failed:
             a["exec_failure"] = failed
@@ -102,8 +109,8 @@ def run_episode(instruction: str, seed: int, planner: GeminiPlanner, *, replan: 
         a["unmet_goals"] = [f"{g.pred.value}({', '.join(g.args)})" for g in unmet]
         if not unmet:
             outcome = "success"
-            sim.caption = "LLMの成功条件をすべて満たしました"
-            sim.hold(1.0)
+            sim.caption = f"{head}\n【判定】成功条件をすべて満たしました（{', '.join(a['goal'])}）"
+            show(2.5)
             break
         fail_layer = "goal_unmet"
         if verbose:
@@ -134,6 +141,7 @@ def main() -> None:
     ap.add_argument("--disturb", action="store_true")
     ap.add_argument("--record", action="store_true")
     ap.add_argument("--camera", default="diag")
+    ap.add_argument("--speed", type=float, default=1.0, help="動画の再生速度（2 なら 2 倍速と表示）")
     args = ap.parse_args()
 
     task = TASK_BY_ID.get(args.task) if args.task else None
@@ -153,7 +161,9 @@ def main() -> None:
     name = f"{args.task or 'custom'}_seed{args.seed}{'_disturb' if args.disturb else ''}"
     Path(OUTPUTS / f"{name}.json").write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
     if args.record:
-        print("video:", sim.save_video(OUTPUTS / f"{name}.mp4"))
+        from src.video import Clip, render
+        scene = f"{task.id} {task.kind}" if task and not args.instruction else "自由指示"
+        render([Clip(sim.frames, sim.captions, scene=scene, speed=args.speed)], OUTPUTS / f"{name}.mp4")
     sim.close()
 
 
